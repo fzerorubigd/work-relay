@@ -1,0 +1,38 @@
+{
+  "name": "work-relay",
+  "version": "0.1.0",
+  "description": "Lightweight MCP server that lets AI agents talk and run commands over a shared MQTT bus.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "bin": {
+    "work-relay": "./src/index.ts"
+  },
+  "main": "./src/index.ts",
+  "files": [
+    "src/",
+    "README.md",
+    "SPEC.md",
+    "INSTALL.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "start": "bun run src/index.ts",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.4",
+    "mqtt": "^5.10.1"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.1.14",
+    "typescript": "^5.7.0"
+  },
+  "engines": {
+    "bun": ">=1.1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/fzerorubigd/work-relay.git"
+  }
+}
