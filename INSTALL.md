@@ -196,6 +196,44 @@ WORK_RELAY_BROKER=mqtt://localhost:1883 \
 
 **Recommended Codex transport:** use `--codex-socket stdio://` for current Codex CLI builds. The bridge starts `codex app-server --listen stdio://`, sends `initialize` with `capabilities.experimentalApi: true`, resumes the persisted thread with `thread/resume`, then sends one `turn/start` per inbound bus envelope. Older raw Unix-socket app-server endpoints can still be passed as a filesystem path, but Codex remote-control sockets may be WebSocket-based and are not always compatible with this bridge's line-delimited JSON-RPC client.
 
+**Passing Codex app-server arguments:** when `--codex-socket stdio://` is used, the bridge owns the child `codex app-server` process. Any arguments after `--` are passed through to that app-server. To bypass approval prompts for the sidecar Codex session:
+
+```bash
+WORK_RELAY_AGENT_ID=codex-test \
+WORK_RELAY_BROKER=mqtt://localhost:1883 \
+  bun run src/index.ts codex-bridge \
+    --codex-socket stdio:// \
+    --thread-id 019e5980-ca72-71a0-85ab-4c790281fc1b \
+    -- \
+    -c 'approval_policy="never"'
+```
+
+For a more autonomous app-server, also set the sandbox mode:
+
+```bash
+WORK_RELAY_AGENT_ID=codex-test \
+WORK_RELAY_BROKER=mqtt://localhost:1883 \
+  bun run src/index.ts codex-bridge \
+    --codex-socket stdio:// \
+    --thread-id 019e5980-ca72-71a0-85ab-4c790281fc1b \
+    -- \
+    -c 'approval_policy="never"' \
+    -c 'sandbox_mode="workspace-write"'
+```
+
+Only use full sandbox bypass in an externally sandboxed environment:
+
+```bash
+WORK_RELAY_AGENT_ID=codex-test \
+WORK_RELAY_BROKER=mqtt://localhost:1883 \
+  bun run src/index.ts codex-bridge \
+    --codex-socket stdio:// \
+    --thread-id 019e5980-ca72-71a0-85ab-4c790281fc1b \
+    -- \
+    -c 'approval_policy="never"' \
+    -c 'sandbox_mode="danger-full-access"'
+```
+
 **TUI visibility:** in `stdio://` mode the bridge uses a sidecar app-server process. It appends turns to the same persisted Codex rollout and the agent can reply through `send_message`, but the inbound bus message may not render as a live user turn in an already-open TUI. Treat the bus reply as the visible success signal, or inspect the rollout under `~/.codex/sessions/...`.
 
 **Daemon lifecycle:** the bridge manages the child app-server process when `stdio://` is used. If Codex disconnects mid-run, the bridge logs and exits non-zero (fail-loud; no silent envelope loss). Operator's process supervisor (systemd, tmux+wrapper script, etc) handles respawn.

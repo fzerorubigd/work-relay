@@ -187,6 +187,44 @@ printenv CODEX_THREAD_ID
 
 For Codex CLI builds where the remote-control Unix socket is WebSocket-based, `--codex-socket stdio://` is the supported path. The bridge starts its own `codex app-server --listen stdio://` child process, sends `initialize` with `capabilities.experimentalApi: true`, resumes the named persisted thread with `thread/resume`, then translates each inbound bus envelope into a `turn/start` call on that thread.
 
+When `--codex-socket stdio://` is used, arguments after `--` are passed through to the child `codex app-server`. To bypass approval prompts for the sidecar Codex session:
+
+```bash
+WORK_RELAY_AGENT_ID=codex-test \
+WORK_RELAY_BROKER=mqtt://localhost:1883 \
+  bun run src/index.ts codex-bridge \
+    --codex-socket stdio:// \
+    --thread-id 019e5980-ca72-71a0-85ab-4c790281fc1b \
+    -- \
+    -c 'approval_policy="never"'
+```
+
+For a more autonomous app-server, also set the sandbox mode:
+
+```bash
+WORK_RELAY_AGENT_ID=codex-test \
+WORK_RELAY_BROKER=mqtt://localhost:1883 \
+  bun run src/index.ts codex-bridge \
+    --codex-socket stdio:// \
+    --thread-id 019e5980-ca72-71a0-85ab-4c790281fc1b \
+    -- \
+    -c 'approval_policy="never"' \
+    -c 'sandbox_mode="workspace-write"'
+```
+
+Only use full sandbox bypass in an externally sandboxed environment:
+
+```bash
+WORK_RELAY_AGENT_ID=codex-test \
+WORK_RELAY_BROKER=mqtt://localhost:1883 \
+  bun run src/index.ts codex-bridge \
+    --codex-socket stdio:// \
+    --thread-id 019e5980-ca72-71a0-85ab-4c790281fc1b \
+    -- \
+    -c 'approval_policy="never"' \
+    -c 'sandbox_mode="danger-full-access"'
+```
+
 Important behavior: this runs a sidecar app-server process. It appends turns to the same persisted Codex rollout and the agent can reply through the already-registered `send_message` MCP tool, but the inbound message may not appear as a live user turn in the currently open TUI. Verify by checking the sender receives the bus reply, or by inspecting the rollout under `~/.codex/sessions/...`.
 
 To smoke-test with Mosquitto:

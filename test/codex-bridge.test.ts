@@ -19,7 +19,14 @@ import path from "node:path";
 import os from "node:os";
 
 import { CodexClient } from "../src/codex-client.js";
-import { parseBridgeArgs } from "../src/codex-bridge.js";
+import {
+  formatBridgeInput,
+  getTurnId,
+  handleCodexNotification,
+  hasNeverApprovalOverride,
+  parseBridgeArgs,
+} from "../src/codex-bridge.js";
+import { Envelope } from "../src/envelope.js";
 
 const sockets: { server: net.Server; path: string }[] = [];
 
@@ -72,6 +79,7 @@ test("parseBridgeArgs: --codex-socket + --thread-id (space-separated)", () => {
   ]);
   expect(got.socketPath).toBe("/tmp/foo.sock");
   expect(got.threadId).toBe("thread-abc");
+  expect(got.codexArgs).toEqual([]);
 });
 
 test("parseBridgeArgs: --codex-socket=... + --thread-id=... (equals form)", () => {
@@ -81,6 +89,24 @@ test("parseBridgeArgs: --codex-socket=... + --thread-id=... (equals form)", () =
   ]);
   expect(got.socketPath).toBe("/tmp/bar.sock");
   expect(got.threadId).toBe("thread-xyz");
+  expect(got.codexArgs).toEqual([]);
+});
+
+test("parseBridgeArgs: passes args after -- to codex app-server", () => {
+  const got = parseBridgeArgs([
+    "--codex-socket", "stdio://",
+    "--thread-id", "thread-abc",
+    "--",
+    "-c", 'approval_policy="never"',
+    "-c", 'sandbox_mode="danger-full-access"',
+  ]);
+
+  expect(got.socketPath).toBe("stdio://");
+  expect(got.threadId).toBe("thread-abc");
+  expect(got.codexArgs).toEqual([
+    "-c", 'approval_policy="never"',
+    "-c", 'sandbox_mode="danger-full-access"',
+  ]);
 });
 
 test("parseBridgeArgs: rejects missing --codex-socket", () => {
@@ -89,6 +115,205 @@ test("parseBridgeArgs: rejects missing --codex-socket", () => {
 
 test("parseBridgeArgs: rejects missing --thread-id", () => {
   expect(() => parseBridgeArgs(["--codex-socket", "/tmp/x.sock"])).toThrow(/--thread-id/);
+});
+
+test("hasNeverApprovalOverride: detects passthrough config", () => {
+  expect(hasNeverApprovalOverride(["-c", 'approval_policy="never"'])).toBe(true);
+  expect(hasNeverApprovalOverride(["--config", "approval_policy=never"])).toBe(true);
+  expect(hasNeverApprovalOverride(["-c", 'approval_policy="on-request"'])).toBe(false);
+});
+
+test("formatBridgeInput: includes bus metadata and reply instruction", () => {
+  const envelope: Envelope = {
+    version: 1,
+    action: "message",
+    source: "yaad",
+    to: "codex-test",
+    ts: "2026-05-24T10:32:01.294Z",
+    payload: {
+      register: "talk",
+      text: "Bridge probe",
+    },
+  };
+
+  expect(formatBridgeInput(envelope)).toBe([
+    "Work-relay bus message",
+    "source: yaad",
+    "to: codex-test",
+    "register: talk",
+    "timestamp: 2026-05-24T10:32:01.294Z",
+    "route: direct",
+    "",
+    "Message:",
+    "Bridge probe",
+    "",
+    'Reply on the bus with send_message(to: "yaad", register: "talk", text: ...).',
+  ].join("\n"));
+});
+
+test("formatBridgeInput: preserves group-room route", () => {
+  const envelope: Envelope = {
+    version: 1,
+    action: "message",
+    source: "agent-a",
+    to: "general",
+    ts: "2026-05-24T10:35:00.000Z",
+    room: "general",
+    payload: {
+      register: "command",
+      text: "review this",
+    },
+  };
+
+  expect(formatBridgeInput(envelope)).toContain("route: group");
+  expect(formatBridgeInput(envelope)).toContain("room: general");
+  expect(formatBridgeInput(envelope)).toContain("register: command");
+  expect(formatBridgeInput(envelope)).toContain(
+    'Reply on the bus with send_message(to: "agent-a", register: "talk", text: ...).',
+  );
+});
+
+test("formatBridgeInput: respects no_reply envelopes", () => {
+  const envelope: Envelope = {
+    version: 1,
+    action: "message",
+    source: "elibion",
+    to: "codex-test",
+    ts: "2026-05-24T10:43:07Z",
+    no_reply: true,
+    payload: {
+      register: "talk",
+      text: "hello",
+    },
+  };
+
+  expect(formatBridgeInput(envelope)).toContain(
+    "The sender marked this envelope no_reply=true; do not send a bus reply unless the message explicitly asks for one.",
+  );
+});
+
+test("getTurnId: extracts turn id from app-server result", () => {
+  expect(getTurnId({ turnId: "turn-123" })).toBe("turn-123");
+  expect(getTurnId({})).toBeNull();
+  expect(getTurnId(null)).toBeNull();
+});
+
+test("handleCodexNotification: fallback-publishes agent text when send_message did not complete", async () => {
+  const published: Envelope[] = [];
+  const turnReplies = new Map<string, {
+    envelope: Envelope;
+    agentText: string;
+    sentViaTool: boolean;
+  }>([
+    ["turn-123", {
+      envelope: {
+        version: 1,
+        action: "message" as const,
+        source: "yaad",
+        to: "codex-test",
+        ts: "2026-05-24T11:08:23.267Z",
+        payload: {
+          register: "talk" as const,
+          text: "Third probe",
+        },
+      },
+      agentText: "",
+      sentViaTool: false,
+    }],
+  ]);
+
+  await handleCodexNotification({
+    method: "item/completed",
+    params: {
+      turnId: "turn-123",
+      item: {
+        type: "agentMessage",
+        id: "item-1",
+        text: "I received it.",
+      },
+    },
+  }, turnReplies, {
+    publishDirect: async (envelope: Envelope) => {
+      published.push(envelope);
+    },
+  }, "codex-test");
+
+  await handleCodexNotification({
+    method: "turn/completed",
+    params: {
+      turn: {
+        id: "turn-123",
+        status: "completed",
+      },
+    },
+  }, turnReplies, {
+    publishDirect: async (envelope: Envelope) => {
+      published.push(envelope);
+    },
+  }, "codex-test");
+
+  expect(published).toHaveLength(1);
+  expect(published[0].source).toBe("codex-test");
+  expect(published[0].to).toBe("yaad");
+  expect(published[0].payload.text).toBe("I received it.");
+  expect(turnReplies.has("turn-123")).toBe(false);
+});
+
+test("handleCodexNotification: does not fallback when send_message completed", async () => {
+  const published: Envelope[] = [];
+  const turnReplies = new Map<string, {
+    envelope: Envelope;
+    agentText: string;
+    sentViaTool: boolean;
+  }>([
+    ["turn-123", {
+      envelope: {
+        version: 1,
+        action: "message" as const,
+        source: "yaad",
+        to: "codex-test",
+        ts: "2026-05-24T11:08:23.267Z",
+        payload: {
+          register: "talk" as const,
+          text: "Third probe",
+        },
+      },
+      agentText: "I received it.",
+      sentViaTool: false,
+    }],
+  ]);
+
+  const bus = {
+    publishDirect: async (envelope: Envelope) => {
+      published.push(envelope);
+    },
+  };
+
+  await handleCodexNotification({
+    method: "item/completed",
+    params: {
+      turnId: "turn-123",
+      item: {
+        type: "mcpToolCall",
+        id: "item-2",
+        server: "work-relay",
+        tool: "send_message",
+        status: "completed",
+      },
+    },
+  }, turnReplies, bus, "codex-test");
+
+  await handleCodexNotification({
+    method: "turn/completed",
+    params: {
+      turn: {
+        id: "turn-123",
+        status: "completed",
+      },
+    },
+  }, turnReplies, bus, "codex-test");
+
+  expect(published).toHaveLength(0);
 });
 
 test("CodexClient: initialize round-trips JSON-RPC against fake daemon", async () => {
@@ -137,6 +362,44 @@ test("CodexClient: turn/start sends threadId + input + returns result", async ()
   client.disconnect();
 });
 
+test("CodexClient: turn/start can override approval policy", async () => {
+  const captured: Record<string, unknown>[] = [];
+  const sockPath = await startFakeCodex((req) => {
+    captured.push(req);
+    return { result: { turnId: "turn-001" } };
+  });
+
+  const client = new CodexClient();
+  await client.connect(sockPath);
+  await client.turnStart("thread-X", "hello from bus", { approvalPolicy: "never" });
+
+  expect(captured[0].params).toEqual({
+    threadId: "thread-X",
+    input: [{ type: "text", text: "hello from bus" }],
+    approvalPolicy: "never",
+  });
+  client.disconnect();
+});
+
+test("CodexClient: resumeThread can override approval policy", async () => {
+  const captured: Record<string, unknown>[] = [];
+  const sockPath = await startFakeCodex((req) => {
+    captured.push(req);
+    return { result: { threadId: "thread-X" } };
+  });
+
+  const client = new CodexClient();
+  await client.connect(sockPath);
+  await client.resumeThread("thread-X", { approvalPolicy: "never" });
+
+  expect(captured[0].params).toEqual({
+    threadId: "thread-X",
+    approvalPolicy: "never",
+    persistExtendedHistory: false,
+  });
+  client.disconnect();
+});
+
 test("CodexClient: rpc-error response rejects the request promise", async () => {
   const sockPath = await startFakeCodex(() => ({
     error: { code: -32601, message: "Method not found" },
@@ -145,6 +408,92 @@ test("CodexClient: rpc-error response rejects the request promise", async () => 
   await client.connect(sockPath);
   await expect(client.request("nope.method")).rejects.toThrow(/Method not found/);
   client.disconnect();
+});
+
+test("CodexClient: response with unknown id is dropped without error event", async () => {
+  const client = new CodexClient();
+
+  let sawError = false;
+  client.on("error", () => {
+    sawError = true;
+  });
+  (client as unknown as { dispatch: (msg: Record<string, unknown>) => void }).dispatch({
+    jsonrpc: "2.0",
+    id: 0,
+    result: {},
+  });
+  await new Promise((r) => setTimeout(r, 10));
+
+  expect(sawError).toBe(false);
+});
+
+test("CodexClient: server approval request gets an auto-accept response when enabled", async () => {
+  const frames: string[] = [];
+  const client = new CodexClient();
+  client.setAutoApproveServerRequests(true);
+  (client as unknown as { writer: { write: (frame: string) => void } }).writer = {
+    write: (frame: string) => {
+      frames.push(frame.trim());
+    },
+  };
+
+  (client as unknown as { dispatch: (msg: Record<string, unknown>) => void }).dispatch({
+    jsonrpc: "2.0",
+    id: 0,
+    method: "item/commandExecution/requestApproval",
+    params: {},
+  });
+  await new Promise((r) => setTimeout(r, 10));
+
+  expect(JSON.parse(frames[0])).toEqual({
+    jsonrpc: "2.0",
+    id: 0,
+    result: { decision: "accept" },
+  });
+});
+
+test("CodexClient: MCP form elicitation gets auto-accepted when enabled", async () => {
+  const frames: string[] = [];
+  const client = new CodexClient();
+  client.setAutoApproveServerRequests(true);
+  (client as unknown as { writer: { write: (frame: string) => void } }).writer = {
+    write: (frame: string) => {
+      frames.push(frame.trim());
+    },
+  };
+
+  (client as unknown as { dispatch: (msg: Record<string, unknown>) => void }).dispatch({
+    jsonrpc: "2.0",
+    id: 0,
+    method: "mcpServer/elicitation/request",
+    params: {
+      threadId: "thread-X",
+      turnId: "turn-X",
+      serverName: "work-relay",
+      mode: "form",
+      message: "Approve MCP tool call?",
+      _meta: null,
+      requestedSchema: {
+        type: "object",
+        properties: {
+          allow: { type: "boolean" },
+          scope: { type: "string", enum: ["turn", "session"] },
+        },
+        required: ["allow", "scope"],
+      },
+    },
+  });
+  await new Promise((r) => setTimeout(r, 10));
+
+  expect(JSON.parse(frames[0])).toEqual({
+    jsonrpc: "2.0",
+    id: 0,
+    result: {
+      action: "accept",
+      content: { allow: true, scope: "turn" },
+      _meta: null,
+    },
+  });
 });
 
 test("CodexClient: socket close mid-request rejects pending + emits close", async () => {
