@@ -66,8 +66,11 @@ export async function runBridge(
 
   const codex = codexFactory();
   await codex.connect(args.socketPath);
-  await codex.initialize();
-
+  // Attach lifecycle listeners BEFORE the initialize handshake so
+  // a malformed-JSON / socket-error during init is caught by the
+  // fail-loud exit path rather than surfacing as an unhandled
+  // EventEmitter error. Same lifecycle window the `close` listener
+  // needs to cover.
   codex.on("close", () => {
     process.stderr.write(
       "work-relay codex-bridge: codex daemon disconnected; exiting\n",
@@ -80,6 +83,7 @@ export async function runBridge(
     );
     process.exit(1);
   });
+  await codex.initialize();
 
   const bus = new Bus(config);
   await bus.connect();
