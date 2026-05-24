@@ -84,6 +84,7 @@ export async function runBridge(
     process.exit(1);
   });
   await codex.initialize();
+  await codex.resumeThread(args.threadId);
 
   const bus = new Bus(config);
   await bus.connect();

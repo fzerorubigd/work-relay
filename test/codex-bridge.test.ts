@@ -54,7 +54,9 @@ async function startFakeCodex(
         if (!line.trim()) continue;
         const req = JSON.parse(line) as Record<string, unknown>;
         const resp = handler(req);
-        conn.write(JSON.stringify({ jsonrpc: "2.0", id: req.id, ...resp }) + "\n");
+        if (req.id !== undefined) {
+          conn.write(JSON.stringify({ jsonrpc: "2.0", id: req.id, ...resp }) + "\n");
+        }
       }
     });
   });
@@ -99,12 +101,18 @@ test("CodexClient: initialize round-trips JSON-RPC against fake daemon", async (
   const client = new CodexClient();
   await client.connect(sockPath);
   await client.initialize();
+  await new Promise((r) => setTimeout(r, 10));
 
-  expect(captured).toHaveLength(1);
+  expect(captured).toHaveLength(2);
   expect(captured[0].method).toBe("initialize");
   expect((captured[0].params as Record<string, unknown>).capabilities).toEqual({
     experimentalApi: true,
   });
+  expect((captured[0].params as Record<string, unknown>).clientInfo).toEqual({
+    name: "work-relay",
+    version: "0.1.0",
+  });
+  expect(captured[1].method).toBe("initialized");
   client.disconnect();
 });
 
@@ -121,7 +129,10 @@ test("CodexClient: turn/start sends threadId + input + returns result", async ()
 
   expect(captured).toHaveLength(1);
   expect(captured[0].method).toBe("turn/start");
-  expect(captured[0].params).toEqual({ threadId: "thread-X", input: "hello from bus" });
+  expect(captured[0].params).toEqual({
+    threadId: "thread-X",
+    input: [{ type: "text", text: "hello from bus" }],
+  });
   expect(result).toEqual({ turnId: "turn-001" });
   client.disconnect();
 });

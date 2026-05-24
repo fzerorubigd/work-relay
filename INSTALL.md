@@ -179,27 +179,28 @@ For non-MCP-aware clients (CLI scripts, Python tools), there's no built-in HTTP 
 
 OpenAI's Codex CLI registers `work-relay` as an MCP server the same way Claude Code does — outbound (`send_message` / `send_group` / `subscribe` / `leave`) works out of the box. Inbound is the gap: Codex's MCP client doesn't surface server-initiated notifications as in-conversation channel blocks the way Claude Code does, so a Codex agent only sees envelopes via mailbox-shape polling (`fetch_messages`).
 
-For real-time inbound, run the `work-relay codex-bridge` subcommand alongside the regular MCP server registration. The bridge attaches to a running Codex app-server daemon via its JSON-RPC control socket and translates each bus envelope into a `turn/start` call — channel-push semantics indistinguishable from the host-native variant.
+For real-time inbound, run the `work-relay codex-bridge` subcommand alongside the regular MCP server registration. The bridge attaches to a Codex app-server JSON-RPC surface and translates each bus envelope into a `turn/start` call.
 
 ```bash
-# Start codex's app-server listening on a unix socket
-codex remote-control start --json  # prints the socket path
-
-# Then run the bridge as a separate process
+# Run the bridge as a separate process.
+# Use the thread id from the Codex session you want to resume:
+#   printenv CODEX_THREAD_ID
 WORK_RELAY_AGENT_ID=my-codex-agent \
 WORK_RELAY_BROKER=mqtt://localhost:1883 \
   bun run src/index.ts codex-bridge \
-    --codex-socket "$HOME/.codex/app-server-control/app-server-control.sock" \
+    --codex-socket stdio:// \
     --thread-id "<persistent-thread-id>"
 ```
 
-**Required:** `--codex-socket` (path to the codex unix socket) + `--thread-id` (the persistent thread the bridge dispatches turns onto). The bridge reuses the same `WORK_RELAY_*` env vars the MCP server mode uses; the agent's bus identity is `WORK_RELAY_AGENT_ID`.
+**Required:** `--codex-socket` + `--thread-id` (the persistent thread the bridge dispatches turns onto). The bridge reuses the same `WORK_RELAY_*` env vars the MCP server mode uses; the agent's bus identity is `WORK_RELAY_AGENT_ID`.
 
-**Wire format:** line-delimited JSON-RPC over the unix socket. The bridge sends `initialize` with `capabilities.experimentalApi: true` (required by codex for the `thread/inject_items` + `turn/start` surface), then one `turn/start` per inbound bus envelope.
+**Recommended Codex transport:** use `--codex-socket stdio://` for current Codex CLI builds. The bridge starts `codex app-server --listen stdio://`, sends `initialize` with `capabilities.experimentalApi: true`, resumes the persisted thread with `thread/resume`, then sends one `turn/start` per inbound bus envelope. Older raw Unix-socket app-server endpoints can still be passed as a filesystem path, but Codex remote-control sockets may be WebSocket-based and are not always compatible with this bridge's line-delimited JSON-RPC client.
 
-**Daemon lifecycle:** the bridge does NOT manage the codex daemon — start / stop codex separately. If the codex daemon disconnects mid-run, the bridge logs and exits non-zero (fail-loud; no silent envelope loss). Operator's process supervisor (systemd, tmux+wrapper script, etc) handles respawn.
+**TUI visibility:** in `stdio://` mode the bridge uses a sidecar app-server process. It appends turns to the same persisted Codex rollout and the agent can reply through `send_message`, but the inbound bus message may not render as a live user turn in an already-open TUI. Treat the bus reply as the visible success signal, or inspect the rollout under `~/.codex/sessions/...`.
 
-**Auth:** beyond what the unix socket gives (filesystem permissions on the socket path), the bridge does not authenticate against codex. Bearer / signed-JWT auth over WebSocket transport is a follow-up; per-process unix-socket access is the v1 boundary.
+**Daemon lifecycle:** the bridge manages the child app-server process when `stdio://` is used. If Codex disconnects mid-run, the bridge logs and exits non-zero (fail-loud; no silent envelope loss). Operator's process supervisor (systemd, tmux+wrapper script, etc) handles respawn.
+
+**Auth:** `stdio://` relies on the local process boundary. Raw Unix socket paths rely on filesystem/socket permissions. Bearer / signed-JWT auth over WebSocket transport is a follow-up.
 
 Per-host instructions for other hosts will be added here as they come up.
 
