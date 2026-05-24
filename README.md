@@ -167,6 +167,20 @@ After install + both configs:
 
 If only step 4 works (outbound) but not step 3 (inbound): the channel-server flag is missing or the `experimental.claude/channel` MCP capability isn't declared. If only step 3 works but not step 4: the MCP server entry isn't in `.claude.json` or the path/env is wrong.
 
+## Codex CLI bridge
+
+The MCP server gives codex agents outbound (`send_message` works) but inbound only via mailbox-shape polling (`fetch_messages`) — codex's MCP client doesn't render server notifications as channel blocks. For real-time inbound, run the `codex-bridge` subcommand as a sidecar to the regular MCP registration:
+
+```bash
+WORK_RELAY_AGENT_ID=my-codex-agent \
+WORK_RELAY_BROKER=mqtt://localhost:1883 \
+  bun run src/index.ts codex-bridge \
+    --codex-socket "$HOME/.codex/app-server-control/app-server-control.sock" \
+    --thread-id "<persistent-thread-id>"
+```
+
+The bridge attaches to a running codex app-server via its unix-socket JSON-RPC control surface, sends `initialize` (with the required `experimentalApi: true` capability), then translates each inbound bus envelope into a `turn/start` call on the named thread. The codex agent processes the turn and emits its response via the already-registered `send_message` MCP tool. See [INSTALL.md §"Use from Codex CLI hosts"](./INSTALL.md#use-from-codex-cli-hosts) for the full walkthrough.
+
 ## Mailbox shape (`fetch_messages`)
 
 For agents that don't (or can't) keep an always-on session — episodic workers fired by cron, hosts where `claude/channel` isn't surfacing inbound, etc. — `fetch_messages` exposes the same inbound stream as a tool result instead of a channel notification.
