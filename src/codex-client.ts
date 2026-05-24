@@ -21,6 +21,10 @@ type Pending = {
   reject: (reason: Error) => void;
 };
 
+export interface CodexTurnOptions {
+  approvalPolicy?: "never";
+}
+
 export class CodexClient extends EventEmitter {
   private socket: net.Socket | null = null;
   private proc: ChildProcessWithoutNullStreams | null = null;
@@ -28,13 +32,18 @@ export class CodexClient extends EventEmitter {
   private requestId = 0;
   private pending = new Map<number, Pending>();
   private rxBuffer = "";
+  private autoApproveServerRequests = false;
+
+  setAutoApproveServerRequests(enabled: boolean): void {
+    this.autoApproveServerRequests = enabled;
+  }
 
   /** Connect to the codex app-server at the given unix-socket path, or
    * spawn a stdio app-server when socketPath is `stdio://`.
    * Resolves once the socket is open; rejects on connect-time error. */
-  async connect(socketPath: string): Promise<void> {
+  async connect(socketPath: string, appServerArgs: string[] = []): Promise<void> {
     if (socketPath === "stdio://") {
-      const proc = spawn("codex", ["app-server", "--listen", "stdio://"], {
+      const proc = spawn("codex", ["app-server", ...appServerArgs, "--listen", "stdio://"], {
         stdio: ["pipe", "pipe", "pipe"],
       });
       this.proc = proc;
@@ -96,14 +105,24 @@ export class CodexClient extends EventEmitter {
 
   private dispatch(msg: Record<string, unknown>): void {
     const id = typeof msg.id === "number" ? msg.id : undefined;
+    const method = typeof msg.method === "string" ? msg.method : undefined;
+    if (id !== undefined && method !== undefined) {
+      this.handleServerRequest(id, method, msg.params);
+      return;
+    }
+
     if (id === undefined) {
-      // Server-initiated notification — ignored. Bridge is request/response only.
+      if (method !== undefined) {
+        this.emit("notification", { method, params: msg.params });
+      }
       return;
     }
     const pending = this.pending.get(id);
     if (!pending) {
-      // Unsolicited response — log and drop.
-      this.emit("error", new Error(`codex-client: response with unknown id ${id}`));
+      // Unsolicited response — warn and drop. Some Codex app-server builds
+      // emit extra response frames during startup/initialization; they should
+      // not tear down the bridge or lose subsequent bus envelopes.
+      process.stderr.write(`codex-client: dropping response with unknown id ${id}\n`);
       return;
     }
     this.pending.delete(id);
@@ -114,6 +133,71 @@ export class CodexClient extends EventEmitter {
       return;
     }
     pending.resolve(msg.result);
+  }
+
+  private handleServerRequest(id: number, method: string, params: unknown): void {
+    process.stderr.write(`codex-client: server request ${method} id ${id}\n`);
+    process.stderr.write(`codex-client: server request params ${safeJson(params)}\n`);
+
+    switch (method) {
+      case "item/commandExecution/requestApproval":
+      case "execCommandApproval": {
+        this.respond(id, {
+          decision: this.autoApproveServerRequests ? "accept" : "decline",
+        });
+        return;
+      }
+
+      case "item/fileChange/requestApproval":
+      case "applyPatchApproval": {
+        this.respond(id, {
+          decision: this.autoApproveServerRequests ? "accept" : "decline",
+        });
+        return;
+      }
+
+      case "item/permissions/requestApproval": {
+        if (!this.autoApproveServerRequests) {
+          this.respondError(id, -32000, "permission request declined by work-relay bridge");
+          return;
+        }
+        const requested =
+          params && typeof params === "object"
+            ? (params as { permissions?: { network?: unknown; fileSystem?: unknown } }).permissions
+            : undefined;
+        this.respond(id, {
+          permissions: {
+            ...(requested?.network ? { network: requested.network } : {}),
+            ...(requested?.fileSystem ? { fileSystem: requested.fileSystem } : {}),
+          },
+          scope: "turn",
+        });
+        return;
+      }
+
+      case "item/tool/requestUserInput": {
+        this.respond(id, { answers: {} });
+        return;
+      }
+
+      case "mcpServer/elicitation/request": {
+        const elicitation = parseMcpElicitation(params);
+        if (!this.autoApproveServerRequests || elicitation?.mode !== "form") {
+          this.respond(id, { action: "decline", content: null, _meta: null });
+          return;
+        }
+        this.respond(id, {
+          action: "accept",
+          content: buildElicitationContent(elicitation.requestedSchema),
+          _meta: null,
+        });
+        return;
+      }
+
+      default: {
+        this.respondError(id, -32601, `work-relay bridge does not handle server request ${method}`);
+      }
+    }
   }
 
   /** Issue a JSON-RPC request. Resolves with the `result`; rejects on
@@ -145,17 +229,26 @@ export class CodexClient extends EventEmitter {
   }
 
   /** Start a turn on the given thread with the given user input. */
-  async turnStart(threadId: string, input: string): Promise<unknown> {
+  async turnStart(
+    threadId: string,
+    input: string,
+    options: CodexTurnOptions = {},
+  ): Promise<unknown> {
     return this.request("turn/start", {
       threadId,
       input: [{ type: "text", text: input }],
+      ...(options.approvalPolicy ? { approvalPolicy: options.approvalPolicy } : {}),
     });
   }
 
   /** Load a persisted thread into this app-server process. */
-  async resumeThread(threadId: string): Promise<unknown> {
+  async resumeThread(
+    threadId: string,
+    options: CodexTurnOptions = {},
+  ): Promise<unknown> {
     return this.request("thread/resume", {
       threadId,
+      ...(options.approvalPolicy ? { approvalPolicy: options.approvalPolicy } : {}),
       persistExtendedHistory: false,
     });
   }
@@ -174,8 +267,94 @@ export class CodexClient extends EventEmitter {
     this.writer.write(frame + "\n");
   }
 
+  private respond(id: number, result: unknown): void {
+    if (!this.writer) return;
+    const frame = JSON.stringify({ jsonrpc: "2.0", id, result });
+    this.writer.write(frame + "\n");
+  }
+
+  private respondError(id: number, code: number, message: string): void {
+    if (!this.writer) return;
+    const frame = JSON.stringify({
+      jsonrpc: "2.0",
+      id,
+      error: { code, message },
+    });
+    this.writer.write(frame + "\n");
+  }
+
   private failAllPending(err: Error): void {
     for (const [, p] of this.pending) p.reject(err);
     this.pending.clear();
+  }
+}
+
+function safeJson(value: unknown): string {
+  try {
+    const json = JSON.stringify(value);
+    if (!json) return String(value);
+    return json.length > 2000 ? `${json.slice(0, 2000)}...` : json;
+  } catch {
+    return String(value);
+  }
+}
+
+function parseMcpElicitation(params: unknown):
+  | { mode: "form"; requestedSchema: Record<string, unknown> }
+  | { mode: "url" }
+  | null {
+  if (!params || typeof params !== "object") return null;
+  const p = params as Record<string, unknown>;
+  if (p.mode === "url") return { mode: "url" };
+  if (p.mode !== "form") return null;
+  const schema = p.requestedSchema;
+  if (!schema || typeof schema !== "object") return null;
+  return { mode: "form", requestedSchema: schema as Record<string, unknown> };
+}
+
+function buildElicitationContent(schema: Record<string, unknown>): Record<string, unknown> {
+  const properties =
+    schema.properties && typeof schema.properties === "object"
+      ? (schema.properties as Record<string, unknown>)
+      : {};
+  const required = Array.isArray(schema.required)
+    ? new Set(schema.required.filter((k): k is string => typeof k === "string"))
+    : new Set<string>();
+
+  const content: Record<string, unknown> = {};
+  for (const [key, raw] of Object.entries(properties)) {
+    if (!raw || typeof raw !== "object") continue;
+    const prop = raw as Record<string, unknown>;
+    if (!required.has(key) && prop.default === undefined) continue;
+    content[key] = elicitationDefaultValue(prop);
+  }
+  return content;
+}
+
+function elicitationDefaultValue(prop: Record<string, unknown>): unknown {
+  if (prop.default !== undefined) return prop.default;
+
+  if (Array.isArray(prop.enum) && prop.enum.length > 0) {
+    return prop.enum[0];
+  }
+  if (Array.isArray(prop.oneOf) && prop.oneOf.length > 0) {
+    const first = prop.oneOf[0];
+    if (first && typeof first === "object" && "const" in first) {
+      return (first as { const: unknown }).const;
+    }
+  }
+
+  switch (prop.type) {
+    case "boolean":
+      return true;
+    case "number":
+    case "integer":
+      return typeof prop.minimum === "number" ? prop.minimum : 0;
+    case "string":
+      return "";
+    case "array":
+      return [];
+    default:
+      return null;
   }
 }
