@@ -16,6 +16,7 @@ import {
   isValidRoomName,
   shouldSuppressSelfEcho,
 } from "./envelope.js";
+import { runBridge } from "./codex-bridge.js";
 
 const TOOLS = [
   {
@@ -133,6 +134,21 @@ function asContent(result: ToolOk | ToolError) {
 }
 
 async function main() {
+  // Subcommand router. The first positional arg (after the binary
+  // path) routes between modes:
+  //   - `codex-bridge` → run the codex-bridge translator (no MCP
+  //     server attached; bridge translates bus envelopes into codex
+  //     JSON-RPC turn/start calls).
+  //   - default (no subcommand, or any other positional) → run the
+  //     existing MCP server (stdio transport, tools surface) for
+  //     backwards compatibility with the documented INSTALL.md
+  //     entrypoint shape.
+  const subcommand = process.argv[2];
+  if (subcommand === "codex-bridge") {
+    await runBridge(process.argv.slice(3));
+    return;
+  }
+
   const config = loadConfig();
   const bus = new Bus(config);
   await bus.connect();
