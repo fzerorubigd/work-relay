@@ -175,11 +175,28 @@ The MCP server gives codex agents outbound (`send_message` works) but inbound on
 WORK_RELAY_AGENT_ID=my-codex-agent \
 WORK_RELAY_BROKER=mqtt://localhost:1883 \
   bun run src/index.ts codex-bridge \
-    --codex-socket "$HOME/.codex/app-server-control/app-server-control.sock" \
+    --codex-socket stdio:// \
     --thread-id "<persistent-thread-id>"
 ```
 
-The bridge attaches to a running codex app-server via its unix-socket JSON-RPC control surface, sends `initialize` (with the required `experimentalApi: true` capability), then translates each inbound bus envelope into a `turn/start` call on the named thread. The codex agent processes the turn and emits its response via the already-registered `send_message` MCP tool. See [INSTALL.md §"Use from Codex CLI hosts"](./INSTALL.md#use-from-codex-cli-hosts) for the full walkthrough.
+Use the Codex thread id for the session you want the bridge to resume. Inside a Codex turn, this is available as:
+
+```bash
+printenv CODEX_THREAD_ID
+```
+
+For Codex CLI builds where the remote-control Unix socket is WebSocket-based, `--codex-socket stdio://` is the supported path. The bridge starts its own `codex app-server --listen stdio://` child process, sends `initialize` with `capabilities.experimentalApi: true`, resumes the named persisted thread with `thread/resume`, then translates each inbound bus envelope into a `turn/start` call on that thread.
+
+Important behavior: this runs a sidecar app-server process. It appends turns to the same persisted Codex rollout and the agent can reply through the already-registered `send_message` MCP tool, but the inbound message may not appear as a live user turn in the currently open TUI. Verify by checking the sender receives the bus reply, or by inspecting the rollout under `~/.codex/sessions/...`.
+
+To smoke-test with Mosquitto:
+
+```bash
+mosquitto_pub -h localhost -p 1883 -t bus/agents/my-codex-agent \
+  -m '{"version":1,"action":"message","source":"tester","to":"my-codex-agent","ts":"2026-01-01T00:00:00Z","payload":{"register":"talk","text":"test"}}'
+```
+
+If messages show up via `fetch_messages` but the bridge does not react, confirm the bridge uses the same `WORK_RELAY_AGENT_ID` and `WORK_RELAY_BROKER` as the sender target. If the bridge logs `thread not found`, make sure it is using a real persisted `CODEX_THREAD_ID`; current bridge versions call `thread/resume` before subscribing. See [INSTALL.md §"Use from Codex CLI hosts"](./INSTALL.md#use-from-codex-cli-hosts) for the full walkthrough.
 
 ## Mailbox shape (`fetch_messages`)
 
