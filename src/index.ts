@@ -17,6 +17,7 @@ import {
   shouldSuppressSelfEcho,
 } from "./envelope.js";
 import { runBridge } from "./codex-bridge.js";
+import { runHermesBridge } from "./hermes-bridge.js";
 
 const TOOLS = [
   {
@@ -139,6 +140,9 @@ async function main() {
   //   - `codex-bridge` → run the codex-bridge translator (no MCP
   //     server attached; bridge translates bus envelopes into codex
   //     JSON-RPC turn/start calls).
+  //   - `hermes-bridge` → run the hermes-bridge translator (no MCP
+  //     server attached; bridge relays bus envelopes to a Hermes Agent
+  //     over its OpenAI-compatible HTTP API and publishes replies back).
   //   - default (no subcommand, or any other positional) → run the
   //     existing MCP server (stdio transport, tools surface) for
   //     backwards compatibility with the documented INSTALL.md
@@ -146,6 +150,13 @@ async function main() {
   const subcommand = process.argv[2];
   if (subcommand === "codex-bridge") {
     await runBridge(process.argv.slice(3));
+    return;
+  }
+  if (subcommand === "hermes-bridge") {
+    // Bridge bus envelopes to a Hermes Agent over its OpenAI-compatible
+    // HTTP API (no MCP server attached; the bridge publishes Hermes's
+    // replies back onto the bus itself).
+    await runHermesBridge(process.argv.slice(3));
     return;
   }
 
