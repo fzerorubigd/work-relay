@@ -236,6 +236,47 @@ mosquitto_pub -h localhost -p 1883 -t bus/agents/my-codex-agent \
 
 If messages show up via `fetch_messages` but the bridge does not react, confirm the bridge uses the same `WORK_RELAY_AGENT_ID` and `WORK_RELAY_BROKER` as the sender target. If the bridge logs `thread not found`, make sure it is using a real persisted `CODEX_THREAD_ID`; current bridge versions call `thread/resume` before subscribing. See [INSTALL.md §"Use from Codex CLI hosts"](./INSTALL.md#use-from-codex-cli-hosts) for the full walkthrough.
 
+## Hermes bridge
+
+Puts a [Hermes Agent](https://github.com/NousResearch/hermes-agent) on the bus as a first-class participant. Other agents talk to it with plain `send_message` / `send_group`, and Hermes's replies come back as ordinary bus envelopes — no bespoke channel, no client-side changes for the callers.
+
+Unlike `codex-bridge` (which drives a local Codex app-server over a JSON-RPC socket and lets the codex agent reply through its own registered `send_message` tool), `hermes-bridge` reaches Hermes over its **OpenAI-compatible HTTP API** (`gateway/platforms/api_server.py`) and **publishes Hermes's reply back to the bus itself**. The Hermes side needs nothing installed beyond its own API server running.
+
+It is **fully config-driven** — the Hermes URL, auth, model, and session strategy are all flags/env, so the same binary bridges any Hermes agent with no hardcoded endpoints.
+
+```bash
+WORK_RELAY_AGENT_ID=hermes \
+WORK_RELAY_BROKER=mqtt://localhost:1883 \
+  bun run src/index.ts hermes-bridge \
+    --hermes-url http://hermes-host:8080
+```
+
+`WORK_RELAY_AGENT_ID` is the bus id Hermes answers as (e.g. `hermes`); senders address it there. `--hermes-url` is the Hermes API server base URL (a trailing `/` or `/v1` is tolerated).
+
+### Flags & environment
+
+| Flag / env | Required | Purpose |
+|---|---|---|
+| `--hermes-url <url>` | yes | Hermes API server base URL, e.g. `http://host:8080` |
+| `--model <model>` | no | Model override passed through per request (e.g. `openrouter:anthropic/claude-sonnet-4.6`); omitted → Hermes uses its configured model |
+| `--session-id <id>` | no | Fixed Hermes session for **all** bus traffic (one shared conversation) |
+| `--session-prefix <p>` | no | Prefix for per-conversation session ids when `--session-id` is unset (default `work-relay:`) |
+| `HERMES_API_KEY` (env) | no | Sent as `Authorization: Bearer <key>` |
+| `HERMES_SESSION_KEY` (env) | no | Sent as `X-Hermes-Session-Key` |
+
+**Session mapping.** By default each bus peer gets its own Hermes session (`<prefix><source>`, or `<prefix>room:<room>` for group posts) so contexts don't bleed together. Pass `--session-id` to force a single shared conversation instead. Continuity is server-side via the `X-Hermes-Session-Id` header — the bridge only sends the new user turn each time.
+
+**Failure behavior.** A wrong URL / down Hermes is surfaced by a best-effort `/health` probe at startup and logged; it is **not** fatal (HTTP is stateless and Hermes may come up later). Per-message chat failures are logged and skipped — a transient Hermes blip never tears down the bus subscription. `no_reply` envelopes are still delivered to Hermes (so they land in its session history) but produce no bus reply.
+
+To smoke-test with Mosquitto (with the bridge running as `WORK_RELAY_AGENT_ID=hermes`):
+
+```bash
+mosquitto_pub -h localhost -p 1883 -t bus/agents/hermes \
+  -m '{"version":1,"action":"message","source":"tester","to":"hermes","ts":"2026-01-01T00:00:00Z","payload":{"register":"talk","text":"hello hermes"}}'
+```
+
+Watch the bridge log for `published reply to tester` and confirm `tester` receives the bus envelope.
+
 ## Mailbox shape (`fetch_messages`)
 
 For agents that don't (or can't) keep an always-on session — episodic workers fired by cron, hosts where `claude/channel` isn't surfacing inbound, etc. — `fetch_messages` exposes the same inbound stream as a tool result instead of a channel notification.
