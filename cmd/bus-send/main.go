@@ -60,6 +60,8 @@ func run() error {
 		register = flag.String("register", "talk", "message register: talk|command")
 		message  = flag.String("message", "", "message text; if empty, read from stdin")
 		source   = flag.String("source", "", "source field on the envelope (default: hostname)")
+		user     = flag.String("user", "", "broker username (default $WORK_RELAY_BROKER_USER)")
+		pass     = flag.String("pass", "", "broker password (default $WORK_RELAY_BROKER_PASS; prefer the env, a flag value is visible in ps)")
 		timeout  = flag.Duration("timeout", 5*time.Second, "deadline for connect+publish")
 	)
 	flag.Parse()
@@ -80,6 +82,22 @@ func run() error {
 	}
 	if brokerURL == "" {
 		brokerURL = defaultBroker
+	}
+
+	// Credentials resolve flag-over-environment, same precedence as -broker.
+	// Names match the work-relay MCP (src/config.ts) so one credential pair
+	// configures both clients.
+	//
+	// Prefer the environment in practice: a value passed as a flag is visible
+	// in `ps` to every user on the host, and this binary runs from cron on
+	// shared machines. The flag exists for interactive and one-off use.
+	brokerUser := *user
+	if brokerUser == "" {
+		brokerUser = os.Getenv("WORK_RELAY_BROKER_USER")
+	}
+	brokerPass := *pass
+	if brokerPass == "" {
+		brokerPass = os.Getenv("WORK_RELAY_BROKER_PASS")
 	}
 
 	text := *message
@@ -134,6 +152,15 @@ func run() error {
 		SetConnectTimeout(*timeout).
 		SetCleanSession(true).
 		SetAutoReconnect(false)
+
+	// Set only when present, so an unauthenticated broker keeps working
+	// unchanged and the two can be migrated independently.
+	if brokerUser != "" {
+		opts.SetUsername(brokerUser)
+	}
+	if brokerPass != "" {
+		opts.SetPassword(brokerPass)
+	}
 
 	client := mqtt.NewClient(opts)
 
