@@ -1,3 +1,4 @@
+import { credsPath, loadCreds, type BrokerCreds } from "./creds.js";
 import { isValidRoomName } from "./envelope.js";
 
 export interface Config {
@@ -71,7 +72,15 @@ export function loadConfig(): Config {
     throw new Error("WORK_RELAY_AGENT_ID environment variable is required");
   }
 
-  const brokerUrl = process.env.WORK_RELAY_BROKER ?? "mqtt://localhost:1883";
+  // Environment first, then the optional credentials file. The file is the
+  // standing default; a deliberately-exported variable should always beat what
+  // is on disk. Same keys, same precedence as the Go client in cmd/bus-send,
+  // so one file configures both.
+  const path = credsPath(process.env);
+  const file: BrokerCreds = path ? loadCreds(path) : {};
+
+  const brokerUrl =
+    process.env.WORK_RELAY_BROKER ?? file.url ?? "mqtt://localhost:1883";
 
   const initialRooms = parseInitialRooms(process.argv.slice(2), process.env);
 
@@ -81,8 +90,8 @@ export function loadConfig(): Config {
   return {
     agentId,
     brokerUrl,
-    brokerUser: process.env.WORK_RELAY_BROKER_USER,
-    brokerPass: process.env.WORK_RELAY_BROKER_PASS,
+    brokerUser: process.env.WORK_RELAY_BROKER_USER ?? file.user,
+    brokerPass: process.env.WORK_RELAY_BROKER_PASS ?? file.pass,
     initialRooms,
     persistent,
     bufferCap: Number.isFinite(bufferCap) && bufferCap > 0 ? bufferCap : 100,

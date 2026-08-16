@@ -101,6 +101,39 @@ Full setup, configuration, Claude Code integration, and verification: see [INSTA
 | `WORK_RELAY_ROOMS` | (none) | Comma-separated rooms to auto-subscribe at startup. Overridden by the `--rooms` argv flag when both are set. |
 | `WORK_RELAY_PERSISTENT` | `false` | When `true`, use a stable client id with `clean: false` so the broker queues messages while this agent's relay is offline. Pair with `fetch_messages` for mailbox-shape workers. |
 | `WORK_RELAY_BUFFER_CAP` | `100` | Max envelopes the in-memory buffer holds before dropping the oldest. Buffer is read by `fetch_messages`. |
+| `WORK_RELAY_CREDS_FILE` | `$XDG_CONFIG_HOME/work-relay/broker.env`, else `~/.config/work-relay/broker.env` | Path to the optional credentials file below. |
+
+### Credentials file (for processes with no environment)
+
+`WORK_RELAY_BROKER`, `WORK_RELAY_BROKER_USER` and `WORK_RELAY_BROKER_PASS` may
+also be read from a file. **Environment wins; the file is the standing
+default.** Both this server and the `bus-send` CLI read the same file, the same
+keys, with the same precedence, so one file configures both.
+
+```bash
+install -m 600 /dev/null ~/.config/work-relay/broker.env
+cat > ~/.config/work-relay/broker.env <<'EOF'
+WORK_RELAY_BROKER=mqtts://broker.example:8883
+WORK_RELAY_BROKER_USER=agent-a
+WORK_RELAY_BROKER_PASS=...
+EOF
+```
+
+**Why a file and not just the environment:** `cron` reads no shell config at
+all — not `/etc/environment`, not `~/.bashrc` — so anything scheduled would
+otherwise connect unauthenticated. Adding a `source` line to each script
+instead leaves a tripwire in every script written later: the one that forgets it
+fails at 3am. A flag is worse still, since a value passed as a flag is visible
+in `ps` to every user on the host.
+
+Format is `KEY=VALUE`, with `#` comments, an optional `export` prefix, and
+optional matching quotes. It is **not** shell: there is no expansion or
+substitution, and only the three keys above are read.
+
+⚠️ **The file must not be readable by group or other.** If it is, both clients
+**fail with an error** rather than reading it — using it anyway would hand the
+credential to every local account while appearing to work. A missing file is
+fine and is not an error.
 
 ### Initial room subscriptions (`--rooms` / `WORK_RELAY_ROOMS`)
 
