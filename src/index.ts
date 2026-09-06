@@ -60,7 +60,8 @@ const TOOLS = [
   },
   {
     name: "subscribe",
-    description: "Join one or more group rooms to start receiving their messages.",
+    description:
+      "Join one or more group rooms to start receiving their messages. The returned `subscribed` list is this relay's INTENDED membership, not confirmation the broker holds it — a fresh process starts with none, so a room joined in an earlier process is absent from the broker while still being reported here. Only receiving traffic from a room proves membership.",
     inputSchema: {
       type: "object",
       properties: {
