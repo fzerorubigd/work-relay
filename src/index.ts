@@ -76,7 +76,8 @@ const TOOLS = [
   },
   {
     name: "leave",
-    description: "Leave one or more group rooms.",
+    description:
+      "Leave one or more group rooms. Not necessarily permanent: a room seeded from configuration (`--rooms` / `WORK_RELAY_ROOMS`) comes back on the next reconnect, because the connect handler re-subscribes the configured rooms every time. To leave such a room for good, remove it from that configuration.",
     inputSchema: {
       type: "object",
       properties: {
