@@ -14,10 +14,17 @@ export const ALLOWED_ACTION = "message";
  * emits `+00:00`, and a DST change is picked up without anyone editing a
  * constant.
  *
- * Every site that mints a `ts` must call this. Two do (`buildEnvelope`, and
- * `filterIncoming`'s fallback for an envelope arriving without one), and
- * nothing validates the field, so a site left on the UTC form would put both
- * formats on the wire with nothing complaining.
+ * THREE sites mint a `ts`, and nothing validates the field, so a site left on
+ * the UTC form puts both formats on the wire with nothing complaining:
+ *
+ *   1. `buildEnvelope`, below.
+ *   2. `filterIncoming`'s fallback, for an envelope arriving without one.
+ *   3. `cmd/bus-send/main.go`, which is a separate Go binary and CANNOT call
+ *      this function — it has its own `localTimestamp`, and the two must be
+ *      changed together.
+ *
+ * The third is named explicitly because it is invisible from this file and is
+ * exactly the site this warning is about.
  */
 export function localTimestamp(now: Date = new Date()): string {
   const pad = (n: number, width = 2) => String(Math.abs(n)).padStart(width, "0");

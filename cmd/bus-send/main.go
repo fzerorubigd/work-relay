@@ -205,17 +205,16 @@ func run() error {
 }
 
 // localTimestamp renders an instant as RFC3339 in ITS OWN zone, so the envelope
-// carries an explicit offset rather than a bare Z.
+// carries an explicit numeric offset rather than a bare Z.
 //
-// time.RFC3339's "Z07:00" emits Z only for a UTC time and ±hh:mm otherwise, so
-// the whole change is not calling .UTC() first. It is a named function rather
-// than an inline call so it can be tested: the TS side has a test per mint site
-// and this one had none.
+// It does NOT use time.RFC3339. That layout is "2006-01-02T15:04:05Z07:00",
+// and Z07:00 renders a literal "Z" for a UTC location — so on a host set to
+// UTC, which is the default in containers and scheduled jobs, it would emit
+// exactly the bare Z this change exists to remove, while the TypeScript sender
+// emitted +00:00 for the same instant. The "-07:00" layout always renders a
+// numeric offset.
 //
-// Known asymmetry, left alone deliberately: on a host actually set to UTC this
-// emits "Z" while the TypeScript side emits "+00:00". Both are valid RFC3339
-// and name the same instant, and forcing them to agree would mean hand-rolling
-// the format here for no reader's benefit.
+// It is a named function rather than an inline call so it can be tested.
 func localTimestamp(t time.Time) string {
-	return t.Format(time.RFC3339)
+	return t.Format("2006-01-02T15:04:05-07:00")
 }

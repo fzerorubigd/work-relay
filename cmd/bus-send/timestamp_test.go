@@ -2,6 +2,7 @@ package main
 
 import (
 	"regexp"
+	"strings"
 	"testing"
 	"time"
 )
@@ -40,11 +41,18 @@ func TestLocalTimestampNamesTheSameInstant(t *testing.T) {
 	}
 }
 
-// A UTC host is the case the offset form must not special-case away: it is
-// correct for it to emit +00:00, and Go's RFC3339 emits Z instead.
-func TestLocalTimestampOnAUTCHostStillParses(t *testing.T) {
+// A UTC host is the case that motivated not using time.RFC3339: that layout
+// renders a literal Z there, which is the thing this change removes, and UTC is
+// the default in containers and scheduled jobs.
+func TestLocalTimestampOnAUTCHostEmitsAnOffsetNotZ(t *testing.T) {
 	got := localTimestamp(time.Now().UTC())
+	if !offsetForm.MatchString(got) {
+		t.Errorf("UTC host emitted %q, want a numeric offset", got)
+	}
+	if !strings.HasSuffix(got, "+00:00") {
+		t.Errorf("UTC host emitted %q, want it to end +00:00", got)
+	}
 	if _, err := time.Parse(time.RFC3339, got); err != nil {
-		t.Fatalf("UTC host output does not parse: %q %v", got, err)
+		t.Fatalf("output does not parse as RFC3339: %q %v", got, err)
 	}
 }
