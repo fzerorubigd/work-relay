@@ -1,5 +1,5 @@
 import { test, expect } from "bun:test";
-import { filterIncoming, isValidRoomName, buildEnvelope } from "../src/envelope.js";
+import { filterIncoming, isValidRoomName, buildEnvelope, localTimestamp } from "../src/envelope.js";
 
 test("filterIncoming: accepts well-formed message envelope (talk)", () => {
   const got = filterIncoming({
@@ -314,4 +314,46 @@ test("shouldSuppressSelfEcho: keeps broadcast", () => {
     "agent-a",
   );
   expect(drop).toBe(false);
+});
+
+test("localTimestamp: RFC3339 with an explicit offset, never a bare Z", () => {
+  const got = localTimestamp(new Date());
+  expect(got).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}[+-]\d{2}:\d{2}$/);
+  expect(got.endsWith("Z")).toBe(false);
+});
+
+test("localTimestamp: names the same instant the UTC form does", () => {
+  const now = new Date();
+  // Parsing the offset form back must land on the original instant, which is
+  // what makes the change safe for anything comparing envelopes by time.
+  expect(new Date(localTimestamp(now)).getTime()).toBe(now.getTime());
+});
+
+test("filterIncoming: mints the fallback ts in the offset form too", () => {
+  // The fallback is the second mint site. Left on the UTC form it would put
+  // both formats on the wire, and nothing validates ts to complain.
+  const got = filterIncoming({
+    version: 1,
+    action: "message",
+    source: "agent-a",
+    to: "agent-b",
+    payload: { register: "talk", text: "no ts supplied" },
+  });
+  expect(got).not.toBeNull();
+  expect(got!.ts.endsWith("Z")).toBe(false);
+  expect(got!.ts).toMatch(/[+-]\d{2}:\d{2}$/);
+});
+
+test("buildEnvelope: mints ts in the offset form", () => {
+  // The primary mint site. Added after a mutation showed that reverting it to
+  // the UTC form broke no test, while the fallback site was covered -- two mint
+  // sites, one of them unguarded.
+  const got = buildEnvelope({
+    source: "agent-a",
+    to: "agent-b",
+    register: "talk",
+    text: "hello",
+  });
+  expect(got.ts.endsWith("Z")).toBe(false);
+  expect(got.ts).toMatch(/[+-]\d{2}:\d{2}$/);
 });

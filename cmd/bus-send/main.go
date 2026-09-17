@@ -147,7 +147,7 @@ func run() error {
 		Action:  actionMessage,
 		Source:  src,
 		To:      *agent,
-		TS:      time.Now().UTC().Format(time.RFC3339),
+		TS:      time.Now().Format(time.RFC3339),
 		Payload: payload{Register: *register, Text: text},
 		// bus-send is one-shot and has no inbox subscription, so it always
 		// signals to receivers that they should not back-reply on this channel.
