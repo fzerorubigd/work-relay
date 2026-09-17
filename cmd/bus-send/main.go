@@ -147,7 +147,7 @@ func run() error {
 		Action:  actionMessage,
 		Source:  src,
 		To:      *agent,
-		TS:      time.Now().Format(time.RFC3339),
+		TS:      localTimestamp(time.Now()),
 		Payload: payload{Register: *register, Text: text},
 		// bus-send is one-shot and has no inbox subscription, so it always
 		// signals to receivers that they should not back-reply on this channel.
@@ -202,4 +202,20 @@ func run() error {
 	}
 
 	return nil
+}
+
+// localTimestamp renders an instant as RFC3339 in ITS OWN zone, so the envelope
+// carries an explicit offset rather than a bare Z.
+//
+// time.RFC3339's "Z07:00" emits Z only for a UTC time and ±hh:mm otherwise, so
+// the whole change is not calling .UTC() first. It is a named function rather
+// than an inline call so it can be tested: the TS side has a test per mint site
+// and this one had none.
+//
+// Known asymmetry, left alone deliberately: on a host actually set to UTC this
+// emits "Z" while the TypeScript side emits "+00:00". Both are valid RFC3339
+// and name the same instant, and forcing them to agree would mean hand-rolling
+// the format here for no reader's benefit.
+func localTimestamp(t time.Time) string {
+	return t.Format(time.RFC3339)
 }

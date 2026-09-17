@@ -357,3 +357,23 @@ test("buildEnvelope: mints ts in the offset form", () => {
   expect(got.ts.endsWith("Z")).toBe(false);
   expect(got.ts).toMatch(/[+-]\d{2}:\d{2}$/);
 });
+
+test("localTimestamp: offset arithmetic holds for half-hour, 45-minute and negative zones", () => {
+  // The shapes that break naive offset maths: truncation toward zero and a
+  // remainder that is negative west of Greenwich. Checked by construction
+  // rather than by switching the process zone, which bun cannot do per-test.
+  const cases: Array<[number, string]> = [
+    [-120, "+02:00"], // Berlin, summer
+    [0, "+00:00"], // a host set to UTC — not "Z"
+    [-330, "+05:30"], // Kolkata
+    [-345, "+05:45"], // Kathmandu
+    [150, "-02:30"], // Newfoundland, summer
+    [480, "-08:00"], // Pacific
+  ];
+  for (const [minutesBehindUtc, expected] of cases) {
+    const d = new Date();
+    // getTimezoneOffset is what localTimestamp reads, so drive it directly.
+    Object.defineProperty(d, "getTimezoneOffset", { value: () => minutesBehindUtc });
+    expect(localTimestamp(d).endsWith(expected)).toBe(true);
+  }
+});
