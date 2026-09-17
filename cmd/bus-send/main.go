@@ -142,17 +142,7 @@ func run() error {
 		}
 	}
 
-	env := envelope{
-		Version: envelopeVersion,
-		Action:  actionMessage,
-		Source:  src,
-		To:      *agent,
-		TS:      localTimestamp(time.Now()),
-		Payload: payload{Register: *register, Text: text},
-		// bus-send is one-shot and has no inbox subscription, so it always
-		// signals to receivers that they should not back-reply on this channel.
-		NoReply: true,
-	}
+	env := buildEnvelope(time.Now(), src, *agent, *register, text)
 	body, err := json.Marshal(env)
 	if err != nil {
 		return fmt.Errorf("marshal envelope: %w", err)
@@ -217,4 +207,27 @@ func run() error {
 // It is a named function rather than an inline call so it can be tested.
 func localTimestamp(t time.Time) string {
 	return t.Format("2006-01-02T15:04:05-07:00")
+}
+
+// buildEnvelope assembles the envelope bus-send publishes.
+//
+// It exists as a function, and takes `now` rather than reading the clock, so a
+// test can assert on the TS field THIS produces under a chosen zone. The
+// timestamp assertions used to sit on localTimestamp, which is a one-line pure
+// function and was never the part at risk: with the helper correct, both
+// `localTimestamp(time.Now().UTC())` here — which silently discards the
+// sender's zone, the whole feature — and a direct `time.Now().Format(...)`
+// left the suite green.
+func buildEnvelope(now time.Time, source, to, register, text string) envelope {
+	return envelope{
+		Version: envelopeVersion,
+		Action:  actionMessage,
+		Source:  source,
+		To:      to,
+		TS:      localTimestamp(now),
+		Payload: payload{Register: register, Text: text},
+		// bus-send is one-shot and has no inbox subscription, so it always
+		// signals to receivers that they should not back-reply on this channel.
+		NoReply: true,
+	}
 }

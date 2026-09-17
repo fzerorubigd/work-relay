@@ -56,3 +56,32 @@ func TestLocalTimestampOnAUTCHostEmitsAnOffsetNotZ(t *testing.T) {
 		t.Fatalf("output does not parse as RFC3339: %q %v", got, err)
 	}
 }
+
+// The assertions above cover localTimestamp, which is a pure one-line function.
+// These cover the line that actually ships a ts, which is what a reader of the
+// envelope receives. Both mutations below left the suite green before it existed:
+// reverting to time.RFC3339, and wrapping the instant in .UTC().
+func TestBuildEnvelopeShipsTheSendersOwnZone(t *testing.T) {
+	kathmandu, err := time.LoadLocation("Asia/Kathmandu")
+	if err != nil {
+		t.Skip("zone unavailable")
+	}
+
+	// A sender east of Greenwich must ship ITS offset. Wrapping the instant in
+	// .UTC() anywhere on this path still yields a valid offset form, so only a
+	// non-UTC zone distinguishes "kept the sender's zone" from "discarded it".
+	env := buildEnvelope(time.Now().In(kathmandu), "agent-a", "agent-b", "talk", "hello")
+	if !strings.HasSuffix(env.TS, "+05:45") {
+		t.Errorf("envelope shipped %q, want the sender's +05:45 offset", env.TS)
+	}
+
+	// And a UTC sender must ship +00:00 rather than a bare Z, which is the case
+	// time.RFC3339 renders wrongly.
+	utc := buildEnvelope(time.Now().UTC(), "agent-a", "agent-b", "talk", "hello")
+	if !strings.HasSuffix(utc.TS, "+00:00") {
+		t.Errorf("UTC sender shipped %q, want +00:00", utc.TS)
+	}
+	if !offsetForm.MatchString(utc.TS) {
+		t.Errorf("UTC sender shipped %q, which is not the offset form", utc.TS)
+	}
+}
