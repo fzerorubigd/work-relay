@@ -5,6 +5,15 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	// Embeds the zone database in the test binary.
+	//
+	// Without it, LoadLocation fails on a host with no system tzdata — a slim
+	// container, a scratch image — and every zone assertion below would skip.
+	// A skipped test still prints "ok" for the package, so the suite would
+	// report success with the shipping bug present. Demonstrated in review:
+	// unresolvable zone names plus a reverted shipping line exits 0.
+	_ "time/tzdata"
 )
 
 // An envelope's ts must carry an explicit offset. A bare Z makes every reader
@@ -17,7 +26,9 @@ func TestLocalTimestampCarriesAnExplicitOffset(t *testing.T) {
 	for _, name := range []string{"Europe/Berlin", "Asia/Kolkata", "Asia/Kathmandu", "America/St_Johns"} {
 		loc, err := time.LoadLocation(name)
 		if err != nil {
-			t.Skipf("zone %s unavailable: %v", name, err)
+			// tzdata is embedded above, so this is a real fault, not an
+			// environment to tiptoe around.
+			t.Fatalf("zone %s unavailable: %v", name, err)
 		}
 		got := localTimestamp(time.Now().In(loc))
 		if !offsetForm.MatchString(got) {
@@ -29,7 +40,7 @@ func TestLocalTimestampCarriesAnExplicitOffset(t *testing.T) {
 func TestLocalTimestampNamesTheSameInstant(t *testing.T) {
 	loc, err := time.LoadLocation("Asia/Kathmandu")
 	if err != nil {
-		t.Skip("zone unavailable")
+		t.Fatalf("zone unavailable: %v", err)
 	}
 	now := time.Now().Truncate(time.Second)
 	parsed, err := time.Parse(time.RFC3339, localTimestamp(now.In(loc)))
@@ -64,7 +75,7 @@ func TestLocalTimestampOnAUTCHostEmitsAnOffsetNotZ(t *testing.T) {
 func TestBuildEnvelopeShipsTheSendersOwnZone(t *testing.T) {
 	kathmandu, err := time.LoadLocation("Asia/Kathmandu")
 	if err != nil {
-		t.Skip("zone unavailable")
+		t.Fatalf("zone unavailable: %v", err)
 	}
 
 	// A sender east of Greenwich must ship ITS offset. Wrapping the instant in
