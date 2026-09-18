@@ -5,6 +5,38 @@ export const ALLOWED_REGISTERS: ReadonlySet<Register> = new Set(["talk", "comman
 export const ENVELOPE_VERSION = 1;
 export const ALLOWED_ACTION = "message";
 
+/**
+ * A timestamp in the sender's LOCAL zone, RFC3339 with an explicit offset.
+ *
+ * `Date.prototype.toISOString` cannot express an offset -- it is always `Z`,
+ * regardless of TZ -- so the parts are assembled here. The offset is read from
+ * the system clock rather than configured: a fleet host set to UTC correctly
+ * emits `+00:00`, and a DST change is picked up without anyone editing a
+ * constant.
+ *
+ * THREE sites mint a `ts`, and nothing validates the field, so a site left on
+ * the UTC form puts both formats on the wire with nothing complaining:
+ *
+ *   1. `buildEnvelope`, below.
+ *   2. `filterIncoming`'s fallback, for an envelope arriving without one.
+ *   3. `cmd/bus-send/main.go`, which is a separate Go binary and CANNOT call
+ *      this function — it has its own `localTimestamp`, and the two must be
+ *      changed together.
+ *
+ * The third is named explicitly because it is invisible from this file and is
+ * exactly the site this warning is about.
+ */
+export function localTimestamp(now: Date = new Date()): string {
+  const pad = (n: number, width = 2) => String(Math.abs(n)).padStart(width, "0");
+  // getTimezoneOffset is minutes *behind* UTC, so east of Greenwich is negative.
+  const offsetMinutes = -now.getTimezoneOffset();
+  const sign = offsetMinutes < 0 ? "-" : "+";
+  const date = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+  const time = `${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
+  const offset = `${sign}${pad((offsetMinutes / 60) | 0)}:${pad(offsetMinutes % 60)}`;
+  return `${date}T${time}.${pad(now.getMilliseconds(), 3)}${offset}`;
+}
+
 export interface Payload {
   register: Register;
   text: string;
@@ -35,7 +67,7 @@ export function buildEnvelope(args: {
     action: ALLOWED_ACTION,
     source: args.source,
     to: args.to,
-    ts: new Date().toISOString(),
+    ts: localTimestamp(),
     payload: {
       register: args.register,
       text: args.text,
@@ -77,7 +109,7 @@ export function filterIncoming(raw: unknown): Envelope | null {
   }
   if (typeof p.text !== "string") return null;
 
-  const ts = typeof obj.ts === "string" ? obj.ts : new Date().toISOString();
+  const ts = typeof obj.ts === "string" ? obj.ts : localTimestamp();
 
   const filtered: Envelope = {
     version: ENVELOPE_VERSION,

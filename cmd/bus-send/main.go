@@ -142,17 +142,7 @@ func run() error {
 		}
 	}
 
-	env := envelope{
-		Version: envelopeVersion,
-		Action:  actionMessage,
-		Source:  src,
-		To:      *agent,
-		TS:      time.Now().UTC().Format(time.RFC3339),
-		Payload: payload{Register: *register, Text: text},
-		// bus-send is one-shot and has no inbox subscription, so it always
-		// signals to receivers that they should not back-reply on this channel.
-		NoReply: true,
-	}
+	env := buildEnvelope(time.Now(), src, *agent, *register, text)
 	body, err := json.Marshal(env)
 	if err != nil {
 		return fmt.Errorf("marshal envelope: %w", err)
@@ -202,4 +192,42 @@ func run() error {
 	}
 
 	return nil
+}
+
+// localTimestamp renders an instant as RFC3339 in ITS OWN zone, so the envelope
+// carries an explicit numeric offset rather than a bare Z.
+//
+// It does NOT use time.RFC3339. That layout is "2006-01-02T15:04:05Z07:00",
+// and Z07:00 renders a literal "Z" for a UTC location — so on a host set to
+// UTC, which is the default in containers and scheduled jobs, it would emit
+// exactly the bare Z this change exists to remove, while the TypeScript sender
+// emitted +00:00 for the same instant. The "-07:00" layout always renders a
+// numeric offset.
+//
+// It is a named function rather than an inline call so it can be tested.
+func localTimestamp(t time.Time) string {
+	return t.Format("2006-01-02T15:04:05-07:00")
+}
+
+// buildEnvelope assembles the envelope bus-send publishes.
+//
+// It exists as a function, and takes `now` rather than reading the clock, so a
+// test can assert on the TS field THIS produces under a chosen zone. The
+// timestamp assertions used to sit on localTimestamp, which is a one-line pure
+// function and was never the part at risk: with the helper correct, both
+// `localTimestamp(time.Now().UTC())` here — which silently discards the
+// sender's zone, the whole feature — and a direct `time.Now().Format(...)`
+// left the suite green.
+func buildEnvelope(now time.Time, source, to, register, text string) envelope {
+	return envelope{
+		Version: envelopeVersion,
+		Action:  actionMessage,
+		Source:  source,
+		To:      to,
+		TS:      localTimestamp(now),
+		Payload: payload{Register: register, Text: text},
+		// bus-send is one-shot and has no inbox subscription, so it always
+		// signals to receivers that they should not back-reply on this channel.
+		NoReply: true,
+	}
 }

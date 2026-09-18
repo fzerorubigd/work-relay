@@ -1,5 +1,5 @@
 import { test, expect } from "bun:test";
-import { filterIncoming, isValidRoomName, buildEnvelope } from "../src/envelope.js";
+import { filterIncoming, isValidRoomName, buildEnvelope, localTimestamp } from "../src/envelope.js";
 
 test("filterIncoming: accepts well-formed message envelope (talk)", () => {
   const got = filterIncoming({
@@ -314,4 +314,66 @@ test("shouldSuppressSelfEcho: keeps broadcast", () => {
     "agent-a",
   );
   expect(drop).toBe(false);
+});
+
+test("localTimestamp: RFC3339 with an explicit offset, never a bare Z", () => {
+  const got = localTimestamp(new Date());
+  expect(got).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}[+-]\d{2}:\d{2}$/);
+  expect(got.endsWith("Z")).toBe(false);
+});
+
+test("localTimestamp: names the same instant the UTC form does", () => {
+  const now = new Date();
+  // Parsing the offset form back must land on the original instant, which is
+  // what makes the change safe for anything comparing envelopes by time.
+  expect(new Date(localTimestamp(now)).getTime()).toBe(now.getTime());
+});
+
+test("filterIncoming: mints the fallback ts in the offset form too", () => {
+  // The fallback is the second mint site. Left on the UTC form it would put
+  // both formats on the wire, and nothing validates ts to complain.
+  const got = filterIncoming({
+    version: 1,
+    action: "message",
+    source: "agent-a",
+    to: "agent-b",
+    payload: { register: "talk", text: "no ts supplied" },
+  });
+  expect(got).not.toBeNull();
+  expect(got!.ts.endsWith("Z")).toBe(false);
+  expect(got!.ts).toMatch(/[+-]\d{2}:\d{2}$/);
+});
+
+test("buildEnvelope: mints ts in the offset form", () => {
+  // The primary mint site. Added after a mutation showed that reverting it to
+  // the UTC form broke no test, while the fallback site was covered -- two mint
+  // sites, one of them unguarded.
+  const got = buildEnvelope({
+    source: "agent-a",
+    to: "agent-b",
+    register: "talk",
+    text: "hello",
+  });
+  expect(got.ts.endsWith("Z")).toBe(false);
+  expect(got.ts).toMatch(/[+-]\d{2}:\d{2}$/);
+});
+
+test("localTimestamp: offset arithmetic holds for half-hour, 45-minute and negative zones", () => {
+  // The shapes that break naive offset maths: truncation toward zero and a
+  // remainder that is negative west of Greenwich. Checked by construction
+  // rather than by switching the process zone, which bun cannot do per-test.
+  const cases: Array<[number, string]> = [
+    [-120, "+02:00"], // Berlin, summer
+    [0, "+00:00"], // a host set to UTC — not "Z"
+    [-330, "+05:30"], // Kolkata
+    [-345, "+05:45"], // Kathmandu
+    [150, "-02:30"], // Newfoundland, summer
+    [480, "-08:00"], // Pacific
+  ];
+  for (const [minutesBehindUtc, expected] of cases) {
+    const d = new Date();
+    // getTimezoneOffset is what localTimestamp reads, so drive it directly.
+    Object.defineProperty(d, "getTimezoneOffset", { value: () => minutesBehindUtc });
+    expect(localTimestamp(d).endsWith(expected)).toBe(true);
+  }
 });
